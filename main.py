@@ -15,7 +15,6 @@ from utils.utils import preproc, rainbow_fill, BaseEngine
 
 
 
-
 tracker = DeepSort(max_age=10)
 _COLORS = rainbow_fill(5).astype(np.float32).reshape(-1, 3)
 
@@ -33,8 +32,15 @@ class Predictor(BaseEngine):
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         out = cv2.VideoWriter('results.avi',fourcc,fps,(width,height))
         fps = 0
+        in_count = 0
+        out_count = 0
+        observed = []
+        in_counter = []
+        out_counter = []
+
         track_id = None
         import time
+
         while True:
             ret, frame = cap.read()
             if not ret:
@@ -57,32 +63,27 @@ class Predictor(BaseEngine):
                          continue
                     xywh = xyxy_to_xywh(dets[i,:4])
                     coor = (int(dets[i,0]), int(dets[i,1]), xywh[2], xywh[3])
-
-                    if not isValidCar(frame.shape, coor):
+                    
+                    if not isValidCar(frame.shape, coor, ratio):
                         continue
-
                     # bbs.append([tuple(xywh), dets[i, 4], dets[i, 5]])
-                    bbs.append([coor, dets[i, 4], dets[i, 5]])
-                print(bbs)
-                tracks = tracker.update_tracks(bbs, frame=frame) # bbs expected to be a list of detections, each in tuples of ( [left,top,w,h], confidence, detection_class )
-                ids = []
-                locations = []
-                class_ids = []
-                scores = []
-                for track in tracks:
-                    if not track.is_confirmed():
-                        continue
-                    track_id = track.track_id
-                    ids.append(track_id)
-                    ltrb = track.to_ltrb()         
-                    locations.append(ltrb)
-                    class_id = track.get_det_class()
-                    class_ids.append(class_id)
-                    score = track.get_det_conf()
-                    scores.append(score)
+                    bbs.append([coor, int(dets[i, 4]*1000)/1000, dets[i, 5]])
 
+                ids, locations, class_ids, scores = trackDS(bbs, frame)
+                _, poly = create_mask(frame)
+
+                int_coords = np.array(poly.exterior.coords, np.int32)
+                int_coords = int_coords.reshape((-1, 1, 2))
+
+                # Draw the polygon on the image
+                cv2.polylines(frame, [int_coords], isClosed=True, color=(0, 255, 0), thickness=2)
 
                 frame = vis(frame, locations, scores, class_ids , conf, ids = ids, class_names=self.class_names)
+                
+                in_active, out_active, in_count, out_count = count(ids, locations, frame.shape, in_counter, out_counter, observed, in_count, out_count)
+
+                frame = vis_count(frame, in_active, out_active, in_count, out_count)
+                
             cv2.imshow('frame', frame)
             out.write(frame)
             if cv2.waitKey(25) & 0xFF == ord('q'):
@@ -92,32 +93,8 @@ class Predictor(BaseEngine):
         cv2.destroyAllWindows()
 
 
-
-def isValidCar(frame_size:tuple, coor:tuple):
-    valid = False
-    width = coor[2]
-    height = coor[3]
-    if frame_size[1]*0.25 > width and frame_size[1]*0.08 < width:
-        valid = 1
-        return valid
-    if frame_size[2]*0.25 > height and frame_size[2]*0.08 < height:
-        valid = 1
-        return valid
-    return valid
-    
-def create_mask(im):
-    #draw polygon
-    poly = Polygon([(0, im.shape[0]), (int(im.shape[1]*0.438), int(im.shape[0]*0.28)), (int(im.shape[1]*0.563), int(im.shape[0]*0.28)), (im.shape[1], im.shape[0])])
-    
-    mask = rasterio.features.rasterize([poly], out_shape=(im.shape[0], im.shape[1]))
-    return mask
-
-def delete_mask(im, mask):
-    for i in range(im.shape[2]):
-        im[:,:,i] = im[:,:,i] * mask
-    return im
-
 def preproc(image, input_size, mean, std, swap=(2, 0, 1)):
+
     if len(image.shape) == 3:
         padded_img = np.ones((input_size[0], input_size[1], 3)) * 114.0
     else:
@@ -130,7 +107,7 @@ def preproc(image, input_size, mean, std, swap=(2, 0, 1)):
         interpolation=cv2.INTER_LINEAR,
     ).astype(np.float32)
 
-    mask = create_mask(resized_img)
+    mask, _ = create_mask(resized_img)
     resized_img = delete_mask(resized_img, mask)
 
     padded_img[: int(img.shape[0] * r), : int(img.shape[1] * r)] = resized_img
@@ -146,7 +123,140 @@ def preproc(image, input_size, mean, std, swap=(2, 0, 1)):
     padded_img = padded_img.transpose(swap)
     padded_img = np.ascontiguousarray(padded_img, dtype=np.float32)
     image = padded_img
+    # plt.imshow(image[0])
+    # plt.show()
     return image, r
+
+def trackDS(bbs, frame):
+    tracks = tracker.update_tracks(bbs, frame=frame) # bbs expected to be a list of detections, each in tuples of ( [left,top,w,h], confidence, detection_class )
+    ids = [] 
+    locations = []
+    class_ids = []
+    scores = []
+    for track in tracks:
+        if not track.is_confirmed():
+            continue
+        ltrb = track.to_ltrb()
+        score = track.get_det_conf()
+        class_id = track.get_det_class()
+
+        track_id = track.track_id
+        ids.append(track_id)
+        locations.append(ltrb)
+        class_ids.append(class_id)
+        scores.append(score)
+    return ids, locations, class_ids, scores
+
+
+def isValidCar(frame_size:tuple, coor:tuple, ratio):
+    valid = False
+    upper_limit = 0.31
+    down_limit = 0.11
+    width = coor[2]
+    height = coor[3]
+    ratio = frame_size[0]/frame_size[1]
+    if int(frame_size[0] * upper_limit) > width and int(frame_size[0] * down_limit) < width:
+        valid = 1
+        return valid
+    if int(frame_size[1] * upper_limit) > height and int(frame_size[1] * down_limit) < height:
+        valid = 1
+        return valid
+    return valid
+    
+def create_mask(im):
+    #draw polygon
+    poly = Polygon([(0, im.shape[0]* 0.95), (int(im.shape[1]*0.28), int(im.shape[0]*0.5)), (int(im.shape[1]*0.71), int(im.shape[0]*0.5)), (im.shape[1], im.shape[0]*0.95)])
+    
+    mask = rasterio.features.rasterize([poly], out_shape=(im.shape[0], im.shape[1]))
+    return mask, poly
+
+def delete_mask(im, mask):
+    for i in range(im.shape[2]):
+        im[:,:,i] = im[:,:,i] * mask
+        im[im == 0.0] = 1e-16
+    return im
+
+def count(ids, locs, size, in_counter, out_counter, observed, in_count, out_count):
+    in_active = 0
+    out_active = 0
+    memory_thres = 12
+    for id, loc in zip(ids, locs):
+       if loc[0] < size[1]/2:
+            in_active += 1  # Increment in_active
+            if id in observed:
+                continue
+            else:
+                if in_counter.count(id) < memory_thres:
+                    in_counter.append(id)
+                else:
+                    observed.append(id)
+                    in_count += 1  # Increment in_count
+                    in_counter = list(filter(lambda a: a != id, in_counter))
+
+       else:
+            out_active += 1  # Increment out_active
+            if id in observed:
+                continue
+            else:
+                if out_counter.count(id) < memory_thres:
+                    out_counter.append(id)
+                else:
+                    observed.append(id)
+                    out_counter = list(filter(lambda a: a != id, out_counter))
+                    out_count += 1  # Increment out_count
+
+    return in_active, out_active, in_count, out_count
+
+def vis_count(frame, in_active, out_active, in_count, out_count):
+    frame = cv2.putText(frame, "TOTAL IN:%d " %in_count, (150, 100), cv2.FONT_HERSHEY_SIMPLEX, 1,
+                        (255, 255, 0), 2)
+    frame = cv2.putText(frame, "ACTIVE:%d " %in_active, (150, 150), cv2.FONT_HERSHEY_SIMPLEX, 1,
+                        (0, 0, 255), 2)
+    frame = cv2.putText(frame, "TOTAL OUT:%d "%out_count, (900, 100), cv2.FONT_HERSHEY_SIMPLEX, 1,
+                        (255, 255, 0), 2)
+    frame = cv2.putText(frame, "ACTIVE:%d " %out_active, (900, 150), cv2.FONT_HERSHEY_SIMPLEX, 1,
+                        (0, 0, 255), 2)    
+    return frame
+
+
+def vis(img, boxes, scores, cls_ids, conf=0.5, ids = [], class_names=None):
+    for i in range(len(boxes)):
+        box = boxes[i]
+
+        cls_id = int(cls_ids[i])
+        score = scores[i]
+        if score == None:
+            continue
+        if score < conf:
+            continue
+
+        x0 = int(box[0])
+        y0 = int(box[1])
+        x1 = int(box[2])
+        y1 = int(box[3])
+
+        color = (_COLORS[cls_id] * 255).astype(np.uint8).tolist()
+        text = '{}:{:.1f}%'.format(class_names[cls_id], score * 100)
+
+        txt_color = (0, 0, 0) if np.mean(_COLORS[cls_id]) > 0.5 else (255, 255, 255)
+        font = cv2.FONT_HERSHEY_SIMPLEX
+
+        txt_size = cv2.getTextSize(text, font, 0.4, 1)[0]
+        cv2.rectangle(img, (x0, y0), (x1, y1), color, 2)
+
+        txt_bk_color = (_COLORS[cls_id] * 255 * 0.7).astype(np.uint8).tolist()
+        cv2.rectangle(
+            img,
+            (x0, y0 + 1),
+            (x0 + txt_size[0] + 1, y0 + int(1.5 * txt_size[1])),
+            txt_bk_color,
+            -1
+        )
+        cv2.putText(img, text, (x0, y0 + txt_size[1]), font, 0.4, txt_color, thickness=1)
+        if ids != [] and not len(ids) <= i:
+            text = ' ID=' + ids[i]
+            cv2.putText(img, text, (x0 , y0 - txt_size[1]*2), font, 0.4, txt_color, thickness=1)
+    return img
 
 
 def xyxy_to_xywh(xyxy):
@@ -176,44 +286,6 @@ def xywh_to_xyxy(xywh):
     x2 = xywh[0] + xywh[2] / 2
     y2 = xywh[1] + xywh[3] / 2
     return np.array([int(x1), int(y1), int(x2), int(y2)])
-
-def vis(img, boxes, scores, cls_ids, conf=0.5, ids = [], class_names=None):
-    for i in range(len(boxes)):
-        box = boxes[i]
-
-        cls_id = int(cls_ids[i])
-        score = scores[i]
-        if score == None:
-            continue
-        if score < conf:
-            continue
-        x0 = int(box[0])
-        y0 = int(box[1])
-        x1 = int(box[2])
-        y1 = int(box[3])
-
-        color = (_COLORS[cls_id] * 255).astype(np.uint8).tolist()
-        text = '{}:{:.1f}%'.format(class_names[cls_id], score * 100)
-
-        txt_color = (0, 0, 0) if np.mean(_COLORS[cls_id]) > 0.5 else (255, 255, 255)
-        font = cv2.FONT_HERSHEY_SIMPLEX
-
-        txt_size = cv2.getTextSize(text, font, 0.4, 1)[0]
-        cv2.rectangle(img, (x0, y0), (x1, y1), color, 2)
-
-        txt_bk_color = (_COLORS[cls_id] * 255 * 0.7).astype(np.uint8).tolist()
-        cv2.rectangle(
-            img,
-            (x0, y0 + 1),
-            (x0 + txt_size[0] + 1, y0 + int(1.5 * txt_size[1])),
-            txt_bk_color,
-            -1
-        )
-        cv2.putText(img, text, (x0, y0 + txt_size[1]), font, 0.4, txt_color, thickness=1)
-        if ids != [] and not len(ids) <= i:
-            text = ' ID=' + ids[i]
-            cv2.putText(img, text, (x0 , y0 - txt_size[1]*2), font, 0.4, txt_color, thickness=1)
-    return img
 
 
 if __name__ == '__main__':
