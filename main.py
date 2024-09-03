@@ -4,7 +4,7 @@ import importlib
 import cv2
 import numpy as np
 from deep_sort_realtime.deepsort_tracker import DeepSort
-from shapely.geometry import Polygon
+from shapely.geometry import Polygon, Point
 import rasterio.features
 import matplotlib.pyplot as plt
 
@@ -15,7 +15,7 @@ from utils.utils import preproc, rainbow_fill, BaseEngine
 
 
 
-tracker = DeepSort(max_age=10)
+tracker = DeepSort(max_age=5)
 _COLORS = rainbow_fill(5).astype(np.float32).reshape(-1, 3)
 
 class Predictor(BaseEngine):
@@ -51,7 +51,7 @@ class Predictor(BaseEngine):
             fps = (fps + (1. / (time.time() - t1))) / 2
             frame = cv2.putText(frame, "FPS:%d " %fps, (0, 40), cv2.FONT_HERSHEY_SIMPLEX, 1,
                                 (0, 0, 255), 2)
-
+            poly = create_mask(frame)
             predictions = np.reshape(data, (1, -1, int(5+self.n_classes)))[0]
             dets = self.postprocess(predictions,ratio)
             if dets is not None:
@@ -63,19 +63,19 @@ class Predictor(BaseEngine):
                          continue
                     xywh = xyxy_to_xywh(dets[i,:4])
                     coor = (int(dets[i,0]), int(dets[i,1]), xywh[2], xywh[3])
-                    
-                    if not isValidCar(frame.shape, coor, ratio):
+                    valid, in_area = isValidCar(frame.shape, coor, poly)
+                    if not valid or not in_area:
                         continue
                     # bbs.append([tuple(xywh), dets[i, 4], dets[i, 5]])
                     bbs.append([coor, int(dets[i, 4]*1000)/1000, dets[i, 5]])
-
-                ids, locations, class_ids, scores = trackDS(bbs, frame)
-                _, poly = create_mask(frame)
-
+                try:
+                    ids, locations, class_ids, scores = trackDS(bbs, frame)
+                except ValueError:
+                    print('Library Error :matrix contains invalid numeric entries')
+                    continue
                 int_coords = np.array(poly.exterior.coords, np.int32)
                 int_coords = int_coords.reshape((-1, 1, 2))
-
-                # Draw the polygon on the image
+                # Draw the interested area with polygon
                 cv2.polylines(frame, [int_coords], isClosed=True, color=(0, 255, 0), thickness=2)
 
                 frame = vis(frame, locations, scores, class_ids , conf, ids = ids, class_names=self.class_names)
@@ -107,8 +107,8 @@ def preproc(image, input_size, mean, std, swap=(2, 0, 1)):
         interpolation=cv2.INTER_LINEAR,
     ).astype(np.float32)
 
-    mask, _ = create_mask(resized_img)
-    resized_img = delete_mask(resized_img, mask)
+    # mask, _ = create_mask(resized_img)
+    # resized_img = delete_mask(resized_img, mask)
 
     padded_img[: int(img.shape[0] * r), : int(img.shape[1] * r)] = resized_img
     # if use yolox set
@@ -148,33 +148,35 @@ def trackDS(bbs, frame):
     return ids, locations, class_ids, scores
 
 
-def isValidCar(frame_size:tuple, coor:tuple, ratio):
+def isValidCar(frame_size:tuple, coor:tuple, poly):
     valid = False
-    upper_limit = 0.31
-    down_limit = 0.11
+    isInside = False
+    upper_limit = 0.35
+    down_limit = 0.05
     width = coor[2]
     height = coor[3]
-    ratio = frame_size[0]/frame_size[1]
+    center = (coor[0]+ coor[2]/2, coor[1]+ coor[3]/2)
+    point = Point(center)
+    isInside = poly.contains(point)
+
     if int(frame_size[0] * upper_limit) > width and int(frame_size[0] * down_limit) < width:
         valid = 1
-        return valid
+        return valid, isInside
     if int(frame_size[1] * upper_limit) > height and int(frame_size[1] * down_limit) < height:
         valid = 1
-        return valid
-    return valid
+        return valid, isInside
+    return valid, isInside
     
 def create_mask(im):
     #draw polygon
-    poly = Polygon([(0, im.shape[0]* 0.95), (int(im.shape[1]*0.28), int(im.shape[0]*0.5)), (int(im.shape[1]*0.71), int(im.shape[0]*0.5)), (im.shape[1], im.shape[0]*0.95)])
-    
-    mask = rasterio.features.rasterize([poly], out_shape=(im.shape[0], im.shape[1]))
-    return mask, poly
+    poly = Polygon([(int(im.shape[1]*0.05), im.shape[0]*0.9), (int(im.shape[1]*0.3), int(im.shape[0]*0.5)), (int(im.shape[1]*0.7), int(im.shape[0]*0.5)), (int(im.shape[1]*0.95), im.shape[0] * 0.9)])
+    return  poly
 
-def delete_mask(im, mask):
-    for i in range(im.shape[2]):
-        im[:,:,i] = im[:,:,i] * mask
-        im[im == 0.0] = 1e-16
-    return im
+# def delete_mask(im, mask):
+#     for i in range(im.shape[2]):
+#         im[:,:,i] = im[:,:,i] * mask
+#         im[im == 0.0] = 0.1
+#     return im
 
 def count(ids, locs, size, in_counter, out_counter, observed, in_count, out_count):
     in_active = 0
@@ -211,11 +213,11 @@ def vis_count(frame, in_active, out_active, in_count, out_count):
     frame = cv2.putText(frame, "TOTAL IN:%d " %in_count, (150, 100), cv2.FONT_HERSHEY_SIMPLEX, 1,
                         (255, 255, 0), 2)
     frame = cv2.putText(frame, "ACTIVE:%d " %in_active, (150, 150), cv2.FONT_HERSHEY_SIMPLEX, 1,
-                        (0, 0, 255), 2)
+                        (0, 255, 0), 2)
     frame = cv2.putText(frame, "TOTAL OUT:%d "%out_count, (900, 100), cv2.FONT_HERSHEY_SIMPLEX, 1,
                         (255, 255, 0), 2)
     frame = cv2.putText(frame, "ACTIVE:%d " %out_active, (900, 150), cv2.FONT_HERSHEY_SIMPLEX, 1,
-                        (0, 0, 255), 2)    
+                        (0, 255, 0), 2)    
     return frame
 
 
@@ -291,4 +293,4 @@ def xywh_to_xyxy(xywh):
 if __name__ == '__main__':
     pred = Predictor(engine_path='yolov5_vehicle.engine')
     pred.get_fps()
-    pred.detect_video("video.mp4", conf=0.5, end2end=False)
+    pred.detect_video("video.mp4", conf=0., end2end=False)
