@@ -41,7 +41,7 @@ def create_mask(im):
 #         im[:,:,i] = im[:,:,i] * mask
 #         im[im == 0.0] = 0.1
 #     return im
-def isValidCar(frame_size:tuple, coor:tuple, poly):
+def isValidCar(frame_size:tuple, coor:tuple, poly)->bool:
     valid = False
     isInside = False
     upper_limit = 0.35
@@ -60,7 +60,7 @@ def isValidCar(frame_size:tuple, coor:tuple, poly):
         return valid, isInside
     return valid, isInside
     
-def count(ids, locs, size, in_counter, out_counter, observed, in_count, out_count):
+def count(ids:list, locs:list, size:int, in_counter:list, out_counter:list, observed:list, in_count:int, out_count:int) -> tuple:
     in_active = 0
     out_active = 0
     memory_thres = 12
@@ -76,7 +76,6 @@ def count(ids, locs, size, in_counter, out_counter, observed, in_count, out_coun
                     observed.append(id)
                     in_count += 1  # Increment in_count
                     in_counter = list(filter(lambda a: a != id, in_counter))
-
        else:
             out_active += 1  # Increment out_active
             if id in observed:

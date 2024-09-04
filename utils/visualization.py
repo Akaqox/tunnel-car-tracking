@@ -3,7 +3,7 @@ from tensorrt_yolo.utils import rainbow_fill
 import numpy as np
 
 
-def vis_count(frame, in_active, out_active, in_count, out_count):
+def vis_count(frame, in_active:int, out_active:int, in_count:int, out_count:int):
     frame = cv2.putText(frame, "TOTAL IN:%d " %in_count, (150, 100), cv2.FONT_HERSHEY_SIMPLEX, 1,
                         (255, 255, 0), 2)
     frame = cv2.putText(frame, "ACTIVE:%d " %in_active, (150, 150), cv2.FONT_HERSHEY_SIMPLEX, 1,
@@ -15,7 +15,7 @@ def vis_count(frame, in_active, out_active, in_count, out_count):
     return frame
 
 
-def vis(img, boxes, scores, cls_ids, conf=0.5, ids = [], class_names = None, nc = 5):
+def vis(img, boxes:list, scores:list, cls_ids:list, conf=0.5, ids:list = [], class_names:list = None, nc = 5):
     _COLORS = rainbow_fill(nc).astype(np.float32).reshape(-1, 3)
     for i in range(len(boxes)):
         box = boxes[i]
