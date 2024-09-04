@@ -9,8 +9,8 @@ from tensorrt_yolo.utils import preproc, BaseEngine
 from bytetrack.byte_tracker import BYTETracker # type: ignore
 
 
-tracker_model = 'ByteTrack'
-# tracker_model = 'DeepSort'
+# tracker_model = 'ByteTrack'
+tracker_model = 'DeepSort'
 
 track_thresh = 0.4
 match_thresh = 0.7
@@ -52,9 +52,7 @@ class Predictor(BaseEngine):
             #Calculate and add FPS value to frame
             t1 = time.time()
             data = self.infer(blob)
-            fps = (fps + (1. / (time.time() - t1))) / 2
-            frame = cv2.putText(frame, "FPS:%d " %fps, (0, 40), cv2.FONT_HERSHEY_SIMPLEX, 1,
-                                (0, 0, 255), 2)
+
             poly = create_mask(frame, detection_area_scales)
             predictions = np.reshape(data, (1, -1, int(5+self.n_classes)))[0]
             
@@ -97,7 +95,10 @@ class Predictor(BaseEngine):
                 frame = draw_poly(frame, poly)
                 frame = vis(frame, locations, scores, class_ids , conf, ids = ids, class_names=self.class_names)
                 frame = vis_count(frame, in_active, out_active, in_count, out_count)
-                
+
+                fps = (fps + (1. / (time.time() - t1))) / 2
+                frame = cv2.putText(frame, "FPS:%d " %fps, (0, 40), cv2.FONT_HERSHEY_SIMPLEX, 1,
+                                (0, 0, 255), 2)
             cv2.imshow('frame', frame)
             out.write(frame)
             if cv2.waitKey(25) & 0xFF == ord('q'):
