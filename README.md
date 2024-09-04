@@ -40,11 +40,12 @@ conda activate track
  <h2><b> </b></h1>
 
 <br />
----
+
 ## 🔎 **REFERENCES**
-TensorRT YOLO Inference  taken code samples from: https://github.com/Linaom1214/TensorRT-For-YOLO-Series
-ByteTrack taken code samples from: https://github.com/ifzhang/ByteTrack
-deep_sort_realtime library is used
+
+<p>TensorRT YOLO Inference  taken code samples from: https://github.com/Linaom1214/TensorRT-For-YOLO-Series</p>
+<p>ByteTrack taken code samples from: https://github.com/ifzhang/ByteTrack</p>
+<p>deep_sort_realtime library is used</p>
 
 
 <br />
