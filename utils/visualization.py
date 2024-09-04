@@ -2,6 +2,13 @@ import cv2
 from tensorrt_yolo.utils import rainbow_fill
 import numpy as np
 
+def draw_poly(frame, poly):
+    int_coords = np.array(poly.exterior.coords, np.int32)
+    int_coords = int_coords.reshape((-1, 1, 2))
+    # Draw the interested area with polygon
+    cv2.polylines(frame, [int_coords], isClosed=True, color=(0, 255, 0), thickness=2)
+
+    return poly
 
 def vis_count(frame, in_active:int, out_active:int, in_count:int, out_count:int):
     frame = cv2.putText(frame, "TOTAL IN:%d " %in_count, (150, 100), cv2.FONT_HERSHEY_SIMPLEX, 1,

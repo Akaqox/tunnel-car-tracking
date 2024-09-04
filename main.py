@@ -3,7 +3,7 @@ import cv2
 import numpy as np
 from deep_sort_realtime.deepsort_tracker import DeepSort
 
-from utils.visualization import vis, vis_count
+from utils.visualization import vis, vis_count, draw_poly
 from utils.utils import xyxy_to_tlwh, count, create_mask, isValidCar
 from tensorrt_yolo.utils import preproc, BaseEngine
 from bytetrack.byte_tracker import BYTETracker # type: ignore
@@ -15,6 +15,7 @@ tracker_model = 'ByteTrack'
 track_thresh = 0.4
 match_thresh = 0.7
 track_buffer = 20
+detection_area_scales =[(0.05, 0.9),(0.3, 0.5),(0.7,0.5),(0.95, 0.9)]
 mot20 = False
 
 args = argparse.Namespace(track_thresh=track_thresh, track_buffer=track_buffer, mot20=mot20, match_thresh = match_thresh)
@@ -48,13 +49,16 @@ class Predictor(BaseEngine):
             if not ret:
                 break
             blob, ratio = preproc(frame, self.imgsz, self.mean, self.std)
+            #Calculate and add FPS value to frame
             t1 = time.time()
             data = self.infer(blob)
             fps = (fps + (1. / (time.time() - t1))) / 2
             frame = cv2.putText(frame, "FPS:%d " %fps, (0, 40), cv2.FONT_HERSHEY_SIMPLEX, 1,
                                 (0, 0, 255), 2)
-            poly = create_mask(frame)
+            poly = create_mask(frame, detection_area_scales)
             predictions = np.reshape(data, (1, -1, int(5+self.n_classes)))[0]
+            
+            #Apply nms to detections
             dets = self.postprocess(predictions,ratio)
             if dets is not None:
                 bbs = []
@@ -66,15 +70,17 @@ class Predictor(BaseEngine):
                          continue
                     xywh = xyxy_to_tlwh(dets[i,:4])
                     coor = int(xywh[0]), int(xywh[1]), int(xywh[2]), int(xywh[3])
-                    
-                    valid, in_area = isValidCar(frame.shape, coor, poly)
 
+                    #Define if detection valid or not
+                    valid, in_area = isValidCar(frame.shape, coor, poly)
                     if not valid or not in_area:
                         continue
+
+                    #Append valid detections to lists
                     bboxes.append([dets[i, :6]])
                     bbs.append([coor, int(dets[i, 4]*1000)/1000, dets[i, 5]])
 
-                # Select the model
+                # Select the model and update tracks
                 if tracker_model == 'ByteTrack':
                         ids, locations, class_ids, scores = trackBT(bboxes, frame)
                 else:
@@ -83,15 +89,13 @@ class Predictor(BaseEngine):
                     except ValueError:
                         print('Library Error :matrix contains invalid numeric entries')
                         continue
-                int_coords = np.array(poly.exterior.coords, np.int32)
-                int_coords = int_coords.reshape((-1, 1, 2))
-                # Draw the interested area with polygon
-                cv2.polylines(frame, [int_coords], isClosed=True, color=(0, 255, 0), thickness=2)
 
-                frame = vis(frame, locations, scores, class_ids , conf, ids = ids, class_names=self.class_names)
-                
+                #?Counting
                 in_active, out_active, in_count, out_count = count(ids, locations, frame.shape, in_counter, out_counter, observed, in_count, out_count)
-
+                
+                #Visualizing the frame and polygon
+                frame = draw_poly(frame, poly)
+                frame = vis(frame, locations, scores, class_ids , conf, ids = ids, class_names=self.class_names)
                 frame = vis_count(frame, in_active, out_active, in_count, out_count)
                 
             cv2.imshow('frame', frame)

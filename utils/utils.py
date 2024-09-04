@@ -31,9 +31,13 @@ def xywh_to_xyxy(xywh):
     return np.array([int(x1), int(y1), int(x2), int(y2)])
 
 
-def create_mask(im):
+def create_mask(im, area):
     #draw polygon
-    poly = Polygon([(int(im.shape[1]*0.05), im.shape[0]*0.9), (int(im.shape[1]*0.3), int(im.shape[0]*0.5)), (int(im.shape[1]*0.7), int(im.shape[0]*0.5)), (int(im.shape[1]*0.95), im.shape[0] * 0.9)])
+    poly = Polygon([(int(im.shape[1]*area[0][0]), int(im.shape[0]*area[0][1])), 
+                     (int(im.shape[1]*area[1][0]), int(im.shape[0]*area[1][1])), 
+                     (int(im.shape[1]* area[2][0]), int(im.shape[0]* area[2][1])), 
+                     (int(im.shape[1]*area[3][0]), int(im.shape[0] * area[3][1]))
+                    ])
     return  poly
 
 # def delete_mask(im, mask):
