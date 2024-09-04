@@ -1,21 +1,31 @@
 import os
 import sys
+import argparse
 import importlib
 import cv2
 import numpy as np
 from deep_sort_realtime.deepsort_tracker import DeepSort
 from shapely.geometry import Polygon, Point
-import rasterio.features
 import matplotlib.pyplot as plt
 
-# Add the directory containing 'utils' to the Python path
-sys.path.append(os.path.join(os.path.dirname(__file__), "TensorRT-For-YOLO-Series"))
+tracker_model = 'ByteTrack'
+# tracker_model = 'DeepSort'
 
 from utils.utils import preproc, rainbow_fill, BaseEngine
+from utils.byte_tracker import BYTETracker # type: ignore
 
+track_thresh = 0.5
+match_thresh = 0.8
+track_buffer = 20
+mot20 = False
+
+args = argparse.Namespace(track_thresh=track_thresh, track_buffer=track_buffer, mot20=mot20, match_thresh = match_thresh)
 
 
 tracker = DeepSort(max_age=5)
+byte_tracker = BYTETracker(args)
+
+
 _COLORS = rainbow_fill(5).astype(np.float32).reshape(-1, 3)
 
 class Predictor(BaseEngine):
@@ -56,23 +66,30 @@ class Predictor(BaseEngine):
             dets = self.postprocess(predictions,ratio)
             if dets is not None:
                 bbs = []
+                bboxes = []
                 for i in range(dets.shape[0]):
-                    if dets[i, 4]  < 0.5:
+                    if dets[i, 4]  < conf:
                         continue
                     if dets[i, 5] != 0.:
                          continue
-                    xywh = xyxy_to_xywh(dets[i,:4])
-                    coor = (int(dets[i,0]), int(dets[i,1]), xywh[2], xywh[3])
+                    xywh = xyxy_to_tlwh(dets[i,:4])
+                    coor = int(xywh[0]), int(xywh[1]), int(xywh[2]), int(xywh[3])
+                    
                     valid, in_area = isValidCar(frame.shape, coor, poly)
+
                     if not valid or not in_area:
                         continue
-                    # bbs.append([tuple(xywh), dets[i, 4], dets[i, 5]])
+                    bboxes.append([dets[i, :6]])
                     bbs.append([coor, int(dets[i, 4]*1000)/1000, dets[i, 5]])
-                try:
-                    ids, locations, class_ids, scores = trackDS(bbs, frame)
-                except ValueError:
-                    print('Library Error :matrix contains invalid numeric entries')
-                    continue
+                if tracker_model == 'ByteTrack':
+                        ids, locations, class_ids, scores = trackBT(bboxes, frame)
+                        
+                else:
+                    try:
+                        ids, locations, class_ids, scores = trackDS(bbs, frame)
+                    except ValueError:
+                        print('Library Error :matrix contains invalid numeric entries')
+                        continue
                 int_coords = np.array(poly.exterior.coords, np.int32)
                 int_coords = int_coords.reshape((-1, 1, 2))
                 # Draw the interested area with polygon
@@ -126,6 +143,34 @@ def preproc(image, input_size, mean, std, swap=(2, 0, 1)):
     # plt.imshow(image[0])
     # plt.show()
     return image, r
+
+
+def trackBT(bboxes, frame):
+    ids = [] 
+    locations = []
+    class_ids = []
+    scores = []
+
+    output = np.zeros((len(bboxes), 5))
+    for i in range(len(bboxes)):
+        class_id = bboxes[i][0][-1]
+        for j in range(5):
+            output[i][j] = bboxes[i][0][j]
+
+    
+
+    stracks = byte_tracker.update(output, frame.shape, frame.shape)
+    for strack in stracks:
+        tlbr = strack.tlbr
+        score = strack.score
+
+        track_id = str(strack.track_id)
+        ids.append(track_id)
+        locations.append(tlbr)
+        class_ids.append(class_id)
+        scores.append(score)
+    return ids, locations, class_ids, scores
+
 
 def trackDS(bbs, frame):
     tracks = tracker.update_tracks(bbs, frame=frame) # bbs expected to be a list of detections, each in tuples of ( [left,top,w,h], confidence, detection_class )
@@ -261,7 +306,7 @@ def vis(img, boxes, scores, cls_ids, conf=0.5, ids = [], class_names=None):
     return img
 
 
-def xyxy_to_xywh(xyxy):
+def xyxy_to_tlwh(xyxy):
     """
     Convert XYXY format (x,y top left and x,y bottom right) to XYWH format (x,y center point and width, height).
     :param xyxy: [X1, Y1, X2, Y2]
@@ -269,11 +314,12 @@ def xyxy_to_xywh(xyxy):
     """
     if np.array(xyxy).ndim > 1 or len(xyxy) > 4:
         raise ValueError('xyxy format: [x1, y1, x2, y2]')
-    x_temp = (xyxy[0] + xyxy[2]) / 2
-    y_temp = (xyxy[1] + xyxy[3]) / 2
+    
     w_temp = abs(xyxy[0] - xyxy[2])
     h_temp = abs(xyxy[1] - xyxy[3])
-    return np.array([int(x_temp), int(y_temp), int(w_temp), int(h_temp)])
+    x1 = xyxy[0]
+    y1 = xyxy[1] 
+    return np.array([int(x1), int(y1), int(w_temp), int(h_temp)])
 
 def xywh_to_xyxy(xywh):
     """
